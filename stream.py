@@ -4,19 +4,21 @@ from os import chdir, mkdir, stat
 from pathlib import Path
 import csv
 import socket
-import tkinter as tk
-from tkinter import ttk
-from guiLoop import guiLoop
+
+import threading
+
 import time
-from tkinter import font
-from tkinter.constants import BOTTOM, DISABLED, END, INSERT, LAST, LEFT, NORMAL, SEPARATOR, TOP, W
 from typing import Sized, Text
+
 
 HOST = '127.0.0.1'      # Localhost
 PORT = 28000            # The port that E4 streaming server is sending to
 BUFFER_SIZE = 4096      # Buffer size of messages
 
-DEVICE_ID = '3BD111'    # Device A02DE7
+# DEVICE_ID = '3BD111'    # Device A02DE7
+
+# Devices
+DEVICE_LIST = []
 
 # Select which data to stream
 ACC = True              # 3-axis acceleration
@@ -29,100 +31,125 @@ TMP = True              # Skin temperature
 SUBJECT_ID = "Experiment_" + str(1)
 
 # Status variables
-CONNECTION_SERVER = False
-CONNECTION_DEVICE = False
+STATUS_CONNECTION_SERVER = False
+STATUS_CONNECTION_DEVICE = False
 STREAMING_INITIALIZED = False
 
-STREAMING = False
+STATUS_STREAMING = False
 
 
-def connect():
+def connect_server():
     # Create a TCP connection with HOST on PORT
     # Creates a global object s of type socket. 
 
     global s
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    global CONNECTION_SERVER 
-    global CONNECTION_DEVICE
     
     try:
-        print("Connecting to server")
         s.connect((HOST,PORT))
-        print("Connection to server established")
-        CONNECTION_SERVER= True
+        return True
+    except:
+        return False
 
-        print("Devices available:")
+def update_device_list():
+    global DEVICE_LIST
+    try:
         s.send("device_list\r\n".encode())
-        response = s.recv(BUFFER_SIZE)
-        print(response.decode("utf-8"))
+        response = s.recv(BUFFER_SIZE).decode("utf-8")
+        device_list = response.split("|")
+        if (len(device_list)>1):
+            device_list = device_list[1:]
+            for i in range(len(device_list)):
+                device_list[i] = device_list[i].split(" ")[1]
+        else:
+            device_list = []
 
-        print("Connecting to device " + DEVICE_ID)
-        s.send(("device_connect " + DEVICE_ID + "\r\n").encode())
-        response = s.recv(BUFFER_SIZE)
-        print(response.decode("utf-8"))
+        DEVICE_LIST = device_list
+        return True
+    except:
+        return False
+
+def check_streaming_server_response(response):
+    # checks if the streaming server response ends with "OK".
+    # Args:
+    #   response: string
+    try:
+        if(response.split(" ")[-1][0:2] == "OK"):
+            return True
+        else:
+            return False
+    except TypeError:
+        print("\tSYSTEM_ERROR: got wrong type!")
+
+
+def connect_device(device_ID):
+    # Create a connection to specified device.
+    # Connection to server needed to run.
+    
+    try:
+        s.send(("device_connect " + device_ID + "\r\n").encode())
+        response = s.recv(BUFFER_SIZE).decode("utf-8")
+        if(not check_streaming_server_response(response)):
+            print("\tFailed to connect to device!")
+            return False
 
         s.send("pause ON \r\n".encode())
         response = s.recv(BUFFER_SIZE)
-        print(response.decode("utf-8"))
-
-        CONNECTION_DEVICE = True
         return True
+    except TypeError:
+        print("\tSYSTEM_ERROR: got wrong type!")
     except:
-        print("An error occured during connection")
         return False
-
 
     
 
 def disconnect():
-    global CONNECTION_DEVICE
     try:
         print("Trying to disconnect")
         s.send(("device_disconnect" + "\r\n").encode())
         print("Now I am here!")
         response = s.recv(BUFFER_SIZE)
-        print(response.decode("utf-8"))
 
-        CONNECTION_DEVICE = False
+        return True
     except:
-        print("An error occured during disconnection")
-    print(CONNECTION_DEVICE)
-
+        return False
 
 def setup_subscribers():
     # Create subscribers for the data to be streamed
+    global ACC, BVP, GSR, IBI, TMP
     try:
         if ACC:
-            print("Starting acc stream")
             s.send(("device_subscribe acc ON \r\n").encode())
-            response = s.recv(BUFFER_SIZE)
-            print(response.decode("utf-8"))
+            response = s.recv(BUFFER_SIZE).decode("utf-8")
+            if(not check_streaming_server_response(response)):
+                print("\tFailed to subscribe to ACC\n")
+                print("response\n" + response)
 
         if BVP:
-            print("Starting bvp stream")
             s.send(("device_subscribe bvp ON \r\n").encode())
-            response = s.recv(BUFFER_SIZE)
-            print(response.decode("utf-8"))
+            response = s.recv(BUFFER_SIZE).decode("utf-8")
+            if(not check_streaming_server_response(response)):
+                print("\tFailed to subscribe to BVP\n")
+                print("\tresponse\n" + response)
+
 
         if GSR:
-            print("Starting gsr stream")
             s.send(("device_subscribe gsr ON \r\n").encode())
-            response = s.recv(BUFFER_SIZE)
-            print(response.decode("utf-8"))
+            response = s.recv(BUFFER_SIZE).decode("utf-8")
+            if(not check_streaming_server_response(response)):
+                print("\tFailed to subscribe to GSR\n")
 
         if IBI:
-            print("Starting ibi stream")
             s.send(("device_subscribe ibi ON \r\n").encode())
-            response = s.recv(BUFFER_SIZE)
-            print(response.decode("utf-8"))
+            response = s.recv(BUFFER_SIZE).decode("utf-8")
+            if(not check_streaming_server_response(response)):
+                print("\tFailed to subscribe to IBI\n")
 
         if TMP:
-            print("Starting tmp stream")
             s.send(("device_subscribe tmp ON \r\n").encode())
-            response = s.recv(BUFFER_SIZE)
-            print(response.decode("utf-8"))
-
+            response = s.recv(BUFFER_SIZE).decode("utf-8")
+            if(not check_streaming_server_response(response)):
+                print("\tFailed to subscribe to TMP\n")
         return True
     except:
 
@@ -131,95 +158,99 @@ def setup_subscribers():
 
 
 def reconnect():
-    connect()
+    connect_server()
+    connect_device(DEVICE_ID)
     setup_subscribers()
 
 
 
 def setup_files():
     # Create folders and files for saving the streamed data.
-    # Data will be saved in .csv files by the use of csv.writer()
+    # Data will be saved in .csv files by the use of global objects of type csv.writer()
     # Creates the following global objects:
     # - acc_data_writer - type csv.writer
     # - bvp_data_writer - type csv.writer
     # - gsr_data_writer - type csv.writer
     # - ibi_data_writer - type csv.writer
     # - tmp_data_writer - type csv.writer
+    try:
+        parent_dir = Path("./" + "data/" + SUBJECT_ID + "/")
 
-    parent_dir = Path("./" + "data/" + SUBJECT_ID + "/")
+        parent_dir.mkdir(parents=True, exist_ok=True)
 
-    parent_dir.mkdir(parents=True, exist_ok=True)
-
-    print("Directory " + "\"" + "./" + SUBJECT_ID + "/" + "Data/" + "\"" + " created")
+        # print("Directory " + "\"" + "./" + SUBJECT_ID + "/" + "Data/" + "\"" + " created")
 
 
-    if ACC:
-        global acc_data 
-        acc_data = open(parent_dir.joinpath("acc_data.csv"), "w")
-        global acc_data_writer 
-        acc_data_writer = csv.writer(acc_data)
-        acc_header = ["timestamp","x","y","z"]
-        acc_data_writer.writerow(acc_header)
+        if ACC:
+            global acc_data 
+            acc_data = open(parent_dir.joinpath("acc_data.csv"), "w")
+            global acc_data_writer 
+            acc_data_writer = csv.writer(acc_data)
+            acc_header = ["timestamp","x","y","z"]
+            acc_data_writer.writerow(acc_header)
 
-    if BVP:
-        global bvp_data 
-        bvp_data = open(parent_dir.joinpath("bvp_data.csv"), "w")
-        global bvp_data_writer 
-        bvp_data_writer = csv.writer(bvp_data)
-        bvp_header = ["timestamp","BVP"]
-        bvp_data_writer.writerow(bvp_header)
+        if BVP:
+            global bvp_data 
+            bvp_data = open(parent_dir.joinpath("bvp_data.csv"), "w")
+            global bvp_data_writer 
+            bvp_data_writer = csv.writer(bvp_data)
+            bvp_header = ["timestamp","BVP"]
+            bvp_data_writer.writerow(bvp_header)
 
-    if GSR:
-        global gsr_data 
-        gsr_data = open(parent_dir.joinpath("gsr_data.csv"), "w")
-        global gsr_data_writer 
-        gsr_data_writer = csv.writer(gsr_data)
-        gsr_header = ["timestamp","GSR"]
-        gsr_data_writer.writerow(gsr_header)
+        if GSR:
+            global gsr_data 
+            gsr_data = open(parent_dir.joinpath("gsr_data.csv"), "w")
+            global gsr_data_writer 
+            gsr_data_writer = csv.writer(gsr_data)
+            gsr_header = ["timestamp","GSR"]
+            gsr_data_writer.writerow(gsr_header)
 
-    if IBI:
-        global ibi_data 
-        ibi_data = open(parent_dir.joinpath("ibi_data.csv"), "w")
-        global ibi_data_writer 
-        ibi_data_writer = csv.writer(ibi_data)
-        ibi_header = ["timestamp","IBI"]
-        ibi_data_writer.writerow(ibi_header)
+        if IBI:
+            global ibi_data 
+            ibi_data = open(parent_dir.joinpath("ibi_data.csv"), "w")
+            global ibi_data_writer 
+            ibi_data_writer = csv.writer(ibi_data)
+            ibi_header = ["timestamp","IBI"]
+            ibi_data_writer.writerow(ibi_header)
 
-        global hr_data 
-        hr_data = open(parent_dir.joinpath("hr_data.csv"), "w")
-        global hr_data_writer 
-        hr_data_writer = csv.writer(hr_data)
-        hr_header = ["timestamp","HR"]
-        hr_data_writer.writerow(hr_header)
+            global hr_data 
+            hr_data = open(parent_dir.joinpath("hr_data.csv"), "w")
+            global hr_data_writer 
+            hr_data_writer = csv.writer(hr_data)
+            hr_header = ["timestamp","HR"]
+            hr_data_writer.writerow(hr_header)
 
-    if TMP:
-        global tmp_data 
-        tmp_data = open(parent_dir.joinpath("tmp_data.csv"), "w")
-        global tmp_data_writer 
-        tmp_data_writer = csv.writer(tmp_data)
-        tmp_header = ["timestamp","Tmp"]
-        tmp_data_writer.writerow(tmp_header)
+        if TMP:
+            global tmp_data 
+            tmp_data = open(parent_dir.joinpath("tmp_data.csv"), "w")
+            global tmp_data_writer 
+            tmp_data_writer = csv.writer(tmp_data)
+            tmp_header = ["timestamp","Tmp"]
+            tmp_data_writer.writerow(tmp_header)
+        
+        return True
+    except:
+        return False
+
+        
+
     
-    print("File setup complete")
-    return True
 
-
-# @guiLoop
-def stream(root):
-    print("Starting streaming")
+def stream():
+    # print("Starting streaming")
     # Starts the stream and saves the incomming data in the correct .csv files.
+    global STREAMING
+    STREAMING = True
     s.send("pause OFF \r\n".encode())
     try:
-        print()
-        # while(True):
-        try:
+        while(STREAMING):
             try:
                 # print("Trying to get response")
                 response = s.recv(BUFFER_SIZE).decode("utf-8")
                 # print("Got response")
                 if "connection lost to device" in response:
                     reconnect()
-                    # break
+                    break
 
                 samples = response.split("\n")
                 for i in range(len(samples)-1):
@@ -238,13 +269,13 @@ def stream(root):
                         timestamp = float(samples[i].split()[1].replace(',','.'))
                         data = float(samples[i].split()[2].replace(',','.'))
                         ibi_data_writer.writerow([timestamp,data])
-                        print("IBI")
+                        # print("IBI")
 
                     if stream_type == "E4_Hr":
                         timestamp = float(samples[i].split()[1].replace(',','.'))
                         data = float(samples[i].split()[2].replace(',','.'))
                         hr_data_writer.writerow([timestamp,data])
-                        print("HR")
+                        # print("HR")
 
                     if stream_type == "E4_Gsr":
                         timestamp = float(samples[i].split()[1].replace(',','.'))
@@ -255,276 +286,173 @@ def stream(root):
                         timestamp = float(samples[i].split()[1].replace(',','.'))
                         data = float(samples[i].split()[2].replace(',','.'))
                         tmp_data_writer.writerow([timestamp,data])
-                print("Data registered")
+                # print("Data registered")
             except socket.timeout:
                 print("Socket timeout")
                 reconnect()
-                # break
-            root.after(100, stream(root))
-        except:
-            print("Something failed")
-        
-    # root.after(100,stream(root))
+                break
+        else:
+            print("\tDisconnecting from device\n")
+            s.send("device_disconnect\r\n".encode())
+            s.close()
     except KeyboardInterrupt:
-        print("Disconnecting from device")
+        print("\tDisconnecting from device\n")
         s.send("device_disconnect\r\n".encode())
         s.close()
 
 
 
-def main():
-    root = tk.Tk()
-    root.title("Empatica E4 connect")
 
-    # H1
-    header_frame = tk.Frame(root)
-    header_frame.grid(row=0, sticky=tk.N)
-    label_H1 = tk.Label(header_frame, text="Welcome to the connection GUI for the Empatica E4", font="Helvetica 18 bold")
-    label_H1.grid(column=0, row=0, ipadx=5,  pady=10, padx=10, sticky=tk.W + tk.N)
-
-
-    # # Select measurements:
-    # ## Header
-    # select_measurements_frame = tk.Frame(root)
-    # select_measurements_frame.grid(column=0, row=1, ipadx=5, pady=10, padx=10, sticky=tk.W + tk.N)
-
-    # label_select_measurements = tk.Label(select_measurements_frame, text="Select which measurements to use:", font="Helvetica 12 bold")
-    # label_select_measurements.grid(column=0, row=0, ipadx=5, pady=5, sticky=tk.W)
-
-    # ## Select
-    # option_acc = tk.IntVar()
-    # option_bvp = tk.IntVar()
-    # option_gsr = tk.IntVar()
-    # option_ibi = tk.IntVar()
-    # option_tmp = tk.IntVar()
-    # chk_acc = tk.Checkbutton(select_measurements_frame, text="ACC", variable=option_acc, onvalue=True, offvalue=False)
-    # chk_bvp = tk.Checkbutton(select_measurements_frame, text="BVP", variable=option_bvp, onvalue=True, offvalue=False)
-    # chk_gsr = tk.Checkbutton(select_measurements_frame, text="GSR", variable=option_gsr, onvalue=True, offvalue=False)
-    # chk_ibi = tk.Checkbutton(select_measurements_frame, text="IBI", variable=option_ibi, onvalue=True, offvalue=False)
-    # chk_tmp = tk.Checkbutton(select_measurements_frame, text="TMP", variable=option_tmp, onvalue=True, offvalue=False)
-    # chk_acc.grid(column=0,row=1, sticky=tk.W)
-    # chk_bvp.grid(column=0,row=2, sticky=tk.W)
-    # chk_gsr.grid(column=0,row=3, sticky=tk.W)
-    # chk_ibi.grid(column=0,row=4, sticky=tk.W)
-    # chk_tmp.grid(column=0,row=5, sticky=tk.W)
-
-    # ## Check_all button
-    # def check_all():
-    #     chk_acc.select()
-    #     chk_bvp.select()
-    #     chk_gsr.select()
-    #     chk_ibi.select()
-    #     chk_tmp.select()
-
-    # button_check_all = tk.Button(select_measurements_frame, text="Check all", command=check_all)
-    # button_check_all.grid(column=0, row=6, ipadx=5, pady=5, sticky=tk.W)
+## Helper functions
+def print_list(list_to_print, pre = "", post = ""):
+    # Print each element in a list with pre before each element and post after
+    # Args:
+    #   list_to_print: list of strings
+    #   pre: string
+    #   post: string
 
 
-    # def choose_selected():
-    #     global ACC, BVP, GSR, IBI, TMP
+    for element in list_to_print:
+        print(pre + str(element) + post)
 
-    #     ACC = option_acc.get()
-    #     BVP = option_bvp.get()
-    #     GSR = option_gsr.get()
-    #     IBI = option_ibi.get()
-    #     TMP = option_tmp.get()
+def print_subscribers(pre = "", post = ""):
+    if(ACC):
+        print(pre + "ACC" + post)
+    if(BVP):
+        print(pre + "BVP" + post)
+    if(GSR):
+        print(pre + "GSR" + post)
+    if(IBI):
+        print(pre + "IBI" + post)
+    if(TMP):
+        print(pre + "TMP" + post)
 
-    #     unlock_task_info()
-    #     task_info.insert('1.0',"Sucessfully set the chosen measurements. Currently the settings are (True = Chosen, False = not chosen):\n")
-    #     task_info.insert('2.0', "ACC: " + str(bool(ACC)) + "\n")
-    #     task_info.insert('3.0', "BVP: " + str(bool(BVP)) + "\n")
-    #     task_info.insert('4.0', "GSR: " + str(bool(GSR)) + "\n")
-    #     task_info.insert('5.0', "IBI: " + str(bool(IBI)) + "\n")
-    #     task_info.insert('6.0', "TMP: " + str(bool(TMP)) + "\n\n")
-    #     lock_task_info()
-
-    # button_choose_selection = tk.Button(select_measurements_frame, text="Choose selected", command=choose_selected)
-    # button_choose_selection.grid(column=0, row=7, ipadx=5, pady=5, sticky=tk.W)
+def divider():
+    print("\n==============================================================================================================\n")
 
 
+def get_specific_input(text, possible_answers):
+    # Will ask for an input until one of possible answers are given
+    # Args:
+    #   text: string
+    #   possible_answers: list of strings
 
-    # Connection buttons
-    connection_button_frame = tk.Frame(root)
-    connection_button_frame.grid(row=3, padx=10, pady=10, sticky=tk.W)
-   
-    ## Header
-    label_connection_button = tk.Label(connection_button_frame,text="Press the button below to connect to or disconnect from the Empatica E4." , font="Helvetica 12 bold")
-    label_connection_button.grid(row=0, columnspan=4)
-   
-    ## Disconnect button
-    def disconnect_button_handler():
-        if(disconnect()):
-            unlock_task_info()
-            task_info.insert('1.0',"Successfully disconnected from device\n\n")
-            lock_task_info()
-        else:
-            unlock_task_info()
-            task_info.insert('1.0',"Disconnection to device failed. Make sure the device is turned on and connected to the E4 Live Server.\n\n")
-            lock_task_info()
-
-    button_disconnect = tk.Button(connection_button_frame,text="Disconnect", command=disconnect_button_handler)
-    button_disconnect.grid(column=0, row=1, ipadx=5, pady=5, sticky=tk.W)
+    possible_answers = [elt.lower() for elt in possible_answers]
+    answer = input(text)
+    while(answer.lower() not in possible_answers):
+        answer = input(text)
+    return answer
 
 
-    ## Connect button
-    def connect_button_handler():
-        if(connect()):
-            unlock_task_info()
-            task_info.insert('1.0',"Successfully connected to device\n\n")
-            lock_task_info()
-        else:
-            unlock_task_info()
-            task_info.insert('1.0',"Connection to device failed. Make sure the device is turned on and connected to the E4 Live Server.\n\n")
-            lock_task_info()
-
-    button_connect = tk.Button(connection_button_frame,text="Connect", command=connect_button_handler)
-    button_connect.grid(column=1, row=1, ipadx=5, pady=5, sticky=tk.W)
-
-    # Prepare for streaming
-    streaming_init_frame = tk.Frame(root)
-    streaming_init_frame.grid(row=4, padx=10, pady=10, sticky=tk.W)
-   
-    ## Header
-    label_streaming_init_button = tk.Label(streaming_init_frame,text="Press the button below to initialize the streaming." , font="Helvetica 12 bold")
-    label_streaming_init_button.grid(row=0, columnspan=4)
-
-    def streaming_init_handler():
-        global STREAMING_INITIALIZED
-        if(setup_subscribers()):
-            setup_files()
-            unlock_task_info()
-            task_info.insert('1.0', "Preparation successfull. You are now ready to stream the data.\n\n")
-            lock_task_info()
-            STREAMING_INITIALIZED = True
-        else:
-            unlock_task_info()
-            task_info.insert('1.0', "Something went wrong when preparing the data. Make sure you have connected to the device.\n\n")
-            lock_task_info()
-            STREAMING_INITIALIZED = False
-    
-    button_streaming_init = tk.Button(streaming_init_frame,text="Initialize streaming", command=streaming_init_handler)
-    button_streaming_init.grid(column=0, row=1, ipadx=5, pady=5, sticky=tk.W)
-
-    # Status:
-    status_frame = tk.Frame(root)
-    status_frame.grid(row=5, padx=10, pady=10, sticky=tk.W)
-
-    status_label = tk.Label(status_frame, text="Status:", font="Helvetica 12 bold")
-    status_label.grid(row=0,sticky=tk.W)
-
-    ## Connection status
-    connection_status_label = tk.Label(status_frame, text="Connection:", font="Helvetica 10 bold")
-    connection_status_label.grid(row=0,sticky=tk.W)
-    
-    ### Server
-    connection_status_server = tk.Label(status_frame, text="Server:", font="Helvetica 10 bold")
-    connection_status_server.grid(column=0, row=1, ipadx=5, pady=5, sticky=tk.W)
-
-    ### Device
-    connection_status_device = tk.Label(status_frame, text="Device: ", font="Helvetica 10 bold")
-    connection_status_device.grid(column=0, row=2, ipadx=5, pady=5, sticky=tk.W)
-
-    ### Streaming Initialized
-    streaming_initialized_status = tk.Label(status_frame, text="Streaming initialized: ", font="Helvetica 10 bold")
-    streaming_initialized_status.grid(column=0, row=3, ipadx=5, pady=5, sticky=tk.W)
-
-    def update_status():
-        # Server
-        if(CONNECTION_SERVER):
-            connection_status_server["bg"] = 'green'
-            connection_status_server["text"] = "Server: CONNECTED"
-        else:
-            connection_status_server["bg"] = 'red'
-            connection_status_server["text"] = "Server: NOT CONNECTED"
-        
-        # Device
-        if(CONNECTION_DEVICE):
-            connection_status_device["bg"] = 'green'
-            connection_status_device["text"] = "Device: CONNECTED to " + str(DEVICE_ID)
-        else:
-            connection_status_device["bg"] = 'red'
-            connection_status_device["text"] = "Device: NOT CONNECTED"
-
-        if(STREAMING_INITIALIZED):
-            streaming_initialized_status["bg"] = 'green'
-            streaming_initialized_status["text"] = "Streaming initialized"
-        else:
-            streaming_initialized_status["bg"] = 'red'
-            streaming_initialized_status["text"] = "Streaming NOT initialized"
-
-        root.after(1000, update_status)
-
-    root.after(1, update_status)
-
-
-    # Start streaming
-    streaming_start_frame = tk.Frame(root)
-    streaming_start_frame.grid(row=6, padx=10, pady=10, sticky=tk.W)
-   
-    ## Header
-    label_streaming_start_button = tk.Label(streaming_start_frame,text="Press the button below to start streaming" , font="Helvetica 12 bold")
-    label_streaming_start_button.grid(row=0, columnspan=4)
-
-    def streaming_start_handler():
-        global STREAMING
-        if(not CONNECTION_SERVER):
-            unlock_task_info()
-            task_info.insert('1.0',"You are not connected to the connection Server. Make sure you have setup the E4 connection server correctly and press the button 'Connect'\n\n")
-            lock_task_info()
-
-        elif(not CONNECTION_DEVICE):
-            unlock_task_info()
-            task_info.insert('1.0',"You are not connected to the connection Server. Make sure you have setup the E4 connection server correctly and press the button 'Connect'\n\n")
-            lock_task_info()
-
-        elif(not STREAMING_INITIALIZED):
-            unlock_task_info()
-            task_info.insert('1.0', "Streaming has not been initialized. Press the button 'Initialize streaming' and try again.\n\n")
-            lock_task_info()
-        else:
-            STREAMING = True
-            unlock_task_info()
-            task_info.insert('1.0', "Streaming started\n\n")
-            lock_task_info()
-
-            root.after(100,stream(root))
-
-    
-    def streaming_stop_handler():
-        global STREAMING
+def get_streaming_input():
+    global STREAMING
+    streaming_input = input("Enter 'stopp' if you want to stopp the recording. Note that this will end the script, terminating the program: ")
+    while(streaming_input.lower() !="stopp"):
+        streaming_input = input("Enter 'stopp' if you want to stopp the recording. Note that this will end the script, terminating the program: ")
+    else:
+        print("\tStopping stream!\n")
         STREAMING = False
-        unlock_task_info()
-        task_info.insert('1.0', "Streaming stopped\n\n")
-        lock_task_info()
+    time.sleep(0.5)
+    get_specific_input("The program is now finished. Enter 'close' to close the window: ",["close"])
+
+
+def main():
+    global STATUS_CONNECTION_SERVER, STATUS_CONNECTION_DEVICE, STATUS_STREAMING, DEVICE_LIST, SUBJECT_ID
     
+    divider()
     
-    button_streaming_start = tk.Button(streaming_start_frame,text="Start streaming", command=streaming_start_handler)
-    button_streaming_start.grid(row=1,column=0, ipadx=5, pady=5, sticky=tk.N)
+    print("Welcome to this connection interface for the Empatica E4 with the E4 Live server.")
+    
+    divider()
+    print("First, we want you to enter a unique ID for this session.")
+    print("All data collected during this experiment will be saved under './data/{ID}'\n")
+    SUBJECT_ID = input("Please enter the unique ID: ")
 
-    button_streaming_stop = tk.Button(streaming_start_frame,text="Stop streaming", command=streaming_stop_handler)
-    button_streaming_stop.grid(row=1,column=1, ipadx=5, pady=5, sticky=tk.N)
+    divider()
 
-    # Task information:
-    task_info_frame = tk.Frame(root)
-    task_info_frame.grid(row=10)
+    print("You should now open the Empatica E4 streaming server. If you do not have it installed already, you can find a link with more information in the Readme.md file.\n")
+    
+    while(True):
+        get_specific_input("Type 'connect' when you are ready to connect to the server: ", ["connect"])
 
-    task_info = tk.Text(task_info_frame, state=DISABLED)
-    task_info.grid(row=0)
+        print("\n\tConnecting to server")
+        if(connect_server()):
+            STATUS_CONNECTION_SERVER = True
+            print("\tConnection to server successfull!\n")
+            
+            break
+        else:
+            STATUS_CONNECTION_SERVER = False
+            print("\tERROR: Something went wrong when trying to connect to the server. Make sure you have opened the E4 streaming server.\n")
+        
+    divider()
 
-    def unlock_task_info():
-        task_info["state"] = NORMAL
+    print("Next, you should connect the Empatica E4 to the streaming server using the BTLE dongle.")
+    print("Remember that you need to have the device turned on to be able to connect to the streaming server.\n")
 
-    def lock_task_info():
-        task_info["state"] = DISABLED
+    get_specific_input("Enter 'update' when the device is connected to show an uppdated list of devices: ",["update"])
+
+    print("\tUpdating device list\n")
+
+    if(not update_device_list()):
+        print("\n\tSomething went wrong when updating device list!\n")
+    else:
+        print("\n\tAvailable devices:")
+        print_list(DEVICE_LIST, pre = "\t - ")
+    
+    print("\n")    
+    
+    device = input("Specify which device you wish to connect to: ").upper()
+    
+    while(device.upper() not in DEVICE_LIST):
+        print(f"\tWARNING: Device {device} is not available. Choose one of the devices from the following list:\n")
+        print("\tAvailable devices")
+        print_list(DEVICE_LIST, pre = "\t - ")
+        print("\n")
+        device = input("Specify which device you wish to connect to: ").upper()
+    
+    print(f"\n\tDevice {device} selected. Trying to connect.")
+    while(not connect_device(device)):
+        print("\tERROR: Something went wrong when connecting to device!\n")
+        answer = get_specific_input("Would you try to connect again? [y/n] ",["y","n"])
+        if(answer == "y"):
+            continue
+        else:
+            return
 
 
-    root.mainloop()
+    
+    print(f"\tConnection to {device} successfull!\n")
+            
+    print("\tSetting up subscribers and files\n")
+    if (not setup_subscribers()):
+        print("\tERROR: Something went wrong when setting up the subscribers.\n")
+        return
+    
+    if (not setup_files()):
+        print("\tERROR: Something went wrong when setting up files\n")
+        return
 
+    print("\tSubscribers and files are ready. The system is now subscribing to:")
+    print_subscribers(pre="\t - ")
 
-def main2():
-    connect()
-    setup_subscribers()
-    setup_files()
-    stream()
+    divider()
+    
+    print("You are now ready to start streaming.\n")
+
+    get_specific_input("Enter 'start' to start streaming: ", ["start"])
+
+    print("\n\tStreaming is starting.\n")
+    stream_thread = threading.Thread(target=stream, args=())
+    stream_thread.start()
+
+    print("\tStreaming started.\n")
+
+    input_thread = threading.Thread(target=get_streaming_input, args=())
+
+    input_thread.start()
+
+            
+
 main()
 
