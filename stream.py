@@ -49,7 +49,7 @@ def connect():
     try:
         print("Connecting to server")
         s.connect((HOST,PORT))
-        print("Connection established")
+        print("Connection to server established")
         CONNECTION_SERVER= True
 
         print("Devices available:")
@@ -200,67 +200,75 @@ def setup_files():
         tmp_header = ["timestamp","Tmp"]
         tmp_data_writer.writerow(tmp_header)
     
-    return
+    print("File setup complete")
+    return True
 
 
-@guiLoop
-def stream():
+# @guiLoop
+def stream(root):
+    print("Starting streaming")
     # Starts the stream and saves the incomming data in the correct .csv files.
     s.send("pause OFF \r\n".encode())
-    # try:
-    while(STREAMING):
+    try:
+        print()
+        # while(True):
         try:
-            # print("Trying to get response")
-            response = s.recv(BUFFER_SIZE).decode("utf-8")
-            # print("Got response")
-            if "connection lost to device" in response:
+            try:
+                # print("Trying to get response")
+                response = s.recv(BUFFER_SIZE).decode("utf-8")
+                # print("Got response")
+                if "connection lost to device" in response:
+                    reconnect()
+                    # break
+
+                samples = response.split("\n")
+                for i in range(len(samples)-1):
+                    stream_type = samples[i].split()[0]
+                    if stream_type == "E4_Acc":
+                        timestamp = float(samples[i].split()[1].replace(',','.'))
+                        data = [int(samples[i].split()[2].replace(',','.')), int(samples[i].split()[3].replace(',','.')), int(samples[i].split()[4].replace(',','.'))]
+                        acc_data_writer.writerow([timestamp] + data)
+
+                    if stream_type == "E4_Bvp":
+                        timestamp = float(samples[i].split()[1].replace(',','.'))
+                        data = float(samples[i].split()[2].replace(',','.'))
+                        bvp_data_writer.writerow([timestamp,data])
+
+                    if stream_type == "E4_Ibi":
+                        timestamp = float(samples[i].split()[1].replace(',','.'))
+                        data = float(samples[i].split()[2].replace(',','.'))
+                        ibi_data_writer.writerow([timestamp,data])
+                        print("IBI")
+
+                    if stream_type == "E4_Hr":
+                        timestamp = float(samples[i].split()[1].replace(',','.'))
+                        data = float(samples[i].split()[2].replace(',','.'))
+                        hr_data_writer.writerow([timestamp,data])
+                        print("HR")
+
+                    if stream_type == "E4_Gsr":
+                        timestamp = float(samples[i].split()[1].replace(',','.'))
+                        data = float(samples[i].split()[2].replace(',','.'))
+                        gsr_data_writer.writerow([timestamp,data])
+
+                    if stream_type == "E4_Temperature":
+                        timestamp = float(samples[i].split()[1].replace(',','.'))
+                        data = float(samples[i].split()[2].replace(',','.'))
+                        tmp_data_writer.writerow([timestamp,data])
+                print("Data registered")
+            except socket.timeout:
+                print("Socket timeout")
                 reconnect()
-
-            samples = response.split("\n")
-            for i in range(len(samples)-1):
-                stream_type = samples[i].split()[0]
-                if stream_type == "E4_Acc":
-                    timestamp = float(samples[i].split()[1].replace(',','.'))
-                    data = [int(samples[i].split()[2].replace(',','.')), int(samples[i].split()[3].replace(',','.')), int(samples[i].split()[4].replace(',','.'))]
-                    acc_data_writer.writerow([timestamp] + data)
-
-                if stream_type == "E4_Bvp":
-                    timestamp = float(samples[i].split()[1].replace(',','.'))
-                    data = float(samples[i].split()[2].replace(',','.'))
-                    bvp_data_writer.writerow([timestamp,data])
-
-                if stream_type == "E4_Ibi":
-                    timestamp = float(samples[i].split()[1].replace(',','.'))
-                    data = float(samples[i].split()[2].replace(',','.'))
-                    ibi_data_writer.writerow([timestamp,data])
-                    print("IBI")
-
-                if stream_type == "E4_Hr":
-                    timestamp = float(samples[i].split()[1].replace(',','.'))
-                    data = float(samples[i].split()[2].replace(',','.'))
-                    hr_data_writer.writerow([timestamp,data])
-                    print("HR")
-
-                if stream_type == "E4_Gsr":
-                    timestamp = float(samples[i].split()[1].replace(',','.'))
-                    data = float(samples[i].split()[2].replace(',','.'))
-                    gsr_data_writer.writerow([timestamp,data])
-
-                if stream_type == "E4_Temperature":
-                    timestamp = float(samples[i].split()[1].replace(',','.'))
-                    data = float(samples[i].split()[2].replace(',','.'))
-                    tmp_data_writer.writerow([timestamp,data])
-                
-        except socket.timeout:
-            print("Socket timeout")
-            reconnect()
-            break
-    
+                # break
+            root.after(100, stream(root))
+        except:
+            print("Something failed")
+        
     # root.after(100,stream(root))
-    # except KeyboardInterrupt:
-    #     print("Disconnecting from device")
-    #     s.send("device_disconnect\r\n".encode())
-    #     s.close()
+    except KeyboardInterrupt:
+        print("Disconnecting from device")
+        s.send("device_disconnect\r\n".encode())
+        s.close()
 
 
 
@@ -479,7 +487,7 @@ def main():
             task_info.insert('1.0', "Streaming started\n\n")
             lock_task_info()
 
-            stream(root)
+            root.after(100,stream(root))
 
     
     def streaming_stop_handler():
@@ -518,6 +526,5 @@ def main2():
     setup_subscribers()
     setup_files()
     stream()
-
 main()
 
