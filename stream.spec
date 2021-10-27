@@ -5,7 +5,7 @@ block_cipher = None
 
 
 a = Analysis(['stream.py'],
-             pathex=['C:\\Users\\petteska\\OneDrive - NTNU\\Prosjektoppgave\\Sensors\\Empatica_E4\\E4_streaming_software'],
+             pathex=['C:\\Users\\petsk\\OneDrive - NTNU\\Prosjektoppgave\\Sensors\\Empatica_E4\\E4_streaming_software'],
              binaries=[],
              datas=[],
              hiddenimports=[],

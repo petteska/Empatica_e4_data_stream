@@ -174,7 +174,7 @@ def setup_files():
     # - ibi_data_writer - type csv.writer
     # - tmp_data_writer - type csv.writer
     try:
-        parent_dir = Path("./" + "data/" + SUBJECT_ID + "/")
+        parent_dir = Path("./" + "data/" + "Empatica_E4_" + SUBJECT_ID + "/")
 
         parent_dir.mkdir(parents=True, exist_ok=True)
 
